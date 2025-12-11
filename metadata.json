@@ -1,0 +1,5 @@
+{
+  "name": "Copy of Copy of Bảng Thi Đua Lớp",
+  "description": "Một ứng dụng để theo dõi điểm thi đua và xếp hạng cho lớp học. Dữ liệu được lưu trữ cục bộ trong trình duyệt của bạn, cho phép xem lại lịch sử điểm số ngay cả khi tải lại trang.",
+  "requestFramePermissions": []
+}
