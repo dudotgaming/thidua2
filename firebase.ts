@@ -1,6 +1,8 @@
+// firebase.ts
 import { initializeApp } from "firebase/app";
 import { getDatabase, ref, onValue, set, update } from "firebase/database";
 
+// Cấu hình Firebase của bạn
 const firebaseConfig = {
   apiKey: "AIzaSyAiWL0oL1bduh6dbW_sWJKxK7E6zm4Zaes",
   authDomain: "a3-6040f.firebaseapp.com",
@@ -14,11 +16,22 @@ const firebaseConfig = {
 const app = initializeApp(firebaseConfig);
 export const db = getDatabase(app);
 
-// helpers
-export const writeData = (path: string, data: any) => set(ref(db, path), data);
-export const updateData = (path: string, data: any) => update(ref(db, path), data);
+// --- Các hàm hỗ trợ (Helpers) ---
+
+// Ghi đè dữ liệu vào đường dẫn (Dùng để lưu danh sách học sinh, luật, note...)
+export const writeData = (path: string, data: any) => {
+  return set(ref(db, path), data);
+};
+
+// Cập nhật một phần dữ liệu (ít dùng trong app này nhưng cứ để đây)
+export const updateData = (path: string, data: any) => {
+  return update(ref(db, path), data);
+};
+
+// Lắng nghe dữ liệu thay đổi theo thời gian thực
 export const listenData = (path: string, callback: (data: any) => void) => {
-  return onValue(ref(db, path), (snapshot) => {
+  const dbRef = ref(db, path);
+  return onValue(dbRef, (snapshot) => {
     callback(snapshot.val());
   });
 };
