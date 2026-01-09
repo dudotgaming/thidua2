@@ -1,16 +1,22 @@
-
+// App.tsx
 import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import type { Student } from './types';
 import { INITIAL_STUDENTS, INITIAL_SCORE } from './constants';
 import Leaderboard from './components/Leaderboard';
 import StudentList from './components/StudentList';
 import TeamChart from './components/TeamChart';
+import { listenData, writeData } from './firebase'; // Import hàm từ firebase
 
-const STORAGE_KEY_STUDENTS = 'classLeaderboardData_11A3_v2';
-const STORAGE_KEY_NOTE = 'classLeaderboardNote_11A3';
-const STORAGE_KEY_RULES = 'classLeaderboardRules_11A3';
-const STORAGE_KEY_CHART_OPEN = 'classLeaderboardChartOpen';
+// --- CẤU HÌNH ĐƯỜNG DẪN DATABASE ---
+const DB_ROOT = "class_11A3"; 
+// Dữ liệu sẽ lưu dạng:
+// class_11A3/students: []
+// class_11A3/note: "..."
+// class_11A3/rules: "..."
 
+const STORAGE_KEY_CHART_OPEN = 'classLeaderboardChartOpen'; // Cái này giữ lại ở local vì là sở thích cá nhân từng máy
+
+// --- MÀU SẮC & HELPER ---
 const rankColorsLate = [
   'bg-red-600', 'bg-red-500', 'bg-red-400', 'bg-gray-700', 'bg-gray-700',
   'bg-gray-700', 'bg-gray-700', 'bg-gray-700', 'bg-gray-700', 'bg-gray-700',
@@ -29,6 +35,7 @@ const teamBadgeColors: Record<number, string> = {
 
 const DEFAULT_RULES = "1. Đi học đúng giờ\n2. Đồng phục chỉnh tề\n3. Giữ vệ sinh lớp học\n4. Hăng hái phát biểu (+ điểm)\n5. Nghỉ học có phép";
 
+// Hàm trộn mảng
 const shuffleArray = <T,>(array: T[]): T[] => {
     const newArray = [...array];
     for (let i = newArray.length - 1; i > 0; i--) {
@@ -38,84 +45,134 @@ const shuffleArray = <T,>(array: T[]): T[] => {
     return newArray;
 };
 
+// Hàm chia tổ ngẫu nhiên ban đầu
 const assignRandomTeams = (students: any[]): Student[] => {
     const shuffled = shuffleArray(students);
     return shuffled.map((student, index) => ({
         ...student,
-        team: (Math.floor(index / 13) % 4) + 1
+        team: (Math.floor(index / 13) % 4) + 1,
+        score: student.score ?? INITIAL_SCORE
     }));
 };
 
 const App: React.FC = () => {
-  const [students, setStudents] = useState<Student[]>(() => {
-    try {
-      const savedData = localStorage.getItem(STORAGE_KEY_STUDENTS);
-      if (savedData) {
-        const parsed = JSON.parse(savedData);
-        if (Array.isArray(parsed) && parsed.length > 0) return parsed;
-      }
-    } catch (e) {}
-    return assignRandomTeams(INITIAL_STUDENTS.map(s => ({ ...s, team: 0, score: INITIAL_SCORE })));
-  });
+  // State dữ liệu chính
+  const [students, setStudents] = useState<Student[]>([]);
+  const [classNote, setClassNote] = useState("");
+  const [classRules, setClassRules] = useState(DEFAULT_RULES);
 
-  const [classNote, setClassNote] = useState(() => {
-    return localStorage.getItem(STORAGE_KEY_NOTE) || "Ghi chú thi đua tuần này...";
-  });
-
-  const [classRules, setClassRules] = useState(() => {
-    return localStorage.getItem(STORAGE_KEY_RULES) || DEFAULT_RULES;
-  });
-
-  const [isChartOpen, setIsChartOpen] = useState(() => {
-    return localStorage.getItem(STORAGE_KEY_CHART_OPEN) === 'true';
-  });
-
+  // State giao diện
+  const [isChartOpen, setIsChartOpen] = useState(() => localStorage.getItem(STORAGE_KEY_CHART_OPEN) === 'true');
   const [isSidebarOpen, setIsSidebarOpen] = useState(true);
   const [isRulesOpen, setIsRulesOpen] = useState(false);
   const [saveStatus, setSaveStatus] = useState<'idle' | 'saved'>('idle');
   const [rulesSaveStatus, setRulesSaveStatus] = useState<'idle' | 'saved'>('idle');
 
+  // --- KẾT NỐI FIREBASE ---
   useEffect(() => {
-    localStorage.setItem(STORAGE_KEY_STUDENTS, JSON.stringify(students));
-  }, [students]);
+    // Lắng nghe toàn bộ thư mục class_11A3
+    const unsub = listenData(DB_ROOT, (data) => {
+      if (data) {
+        // Cập nhật Students
+        if (data.students) {
+           if (Array.isArray(data.students)) {
+             setStudents(data.students);
+           } else {
+             // Phòng trường hợp Firebase lưu dạng object key
+             setStudents(Object.values(data.students));
+           }
+        }
+        
+        // Cập nhật Note
+        if (data.note !== undefined) setClassNote(data.note);
+        
+        // Cập nhật Rules
+        if (data.rules !== undefined) setClassRules(data.rules);
 
-  useEffect(() => {
-    localStorage.setItem(STORAGE_KEY_NOTE, classNote);
-  }, [classNote]);
+      } else {
+        // Nếu DB chưa có dữ liệu (lần chạy đầu tiên), khởi tạo mặc định và đẩy lên
+        const initialStudents = assignRandomTeams(INITIAL_STUDENTS);
+        const initialData = {
+          students: initialStudents,
+          note: "Ghi chú thi đua tuần này...",
+          rules: DEFAULT_RULES
+        };
+        // Ghi dữ liệu khởi tạo lên Firebase
+        writeData(DB_ROOT, initialData);
+      }
+    });
 
+    return () => {
+      // Cleanup listener khi tắt app
+      if (typeof unsub === "function") unsub();
+    };
+  }, []);
+
+  // Lưu trạng thái Chart mở/đóng vào LocalStorage (vì đây là setting cá nhân)
   useEffect(() => {
     localStorage.setItem(STORAGE_KEY_CHART_OPEN, isChartOpen.toString());
   }, [isChartOpen]);
 
+
+  // --- CÁC HÀM XỬ LÝ LOGIC & GHI FIREBASE ---
+
+  // Helper để lưu danh sách học sinh lên Firebase
+  const saveStudentsToFirebase = (newStudents: Student[]) => {
+    writeData(`${DB_ROOT}/students`, newStudents).catch(err => console.error("Lỗi lưu student:", err));
+  };
+
+  // 1. Thay đổi điểm số (Realtime ngay lập tức)
   const handleScoreChange = useCallback((studentId: number, amount: number) => {
-    setStudents(prev => prev.map(s => s.id === studentId ? { ...s, score: s.score + amount } : s));
+    // Tính toán dựa trên state hiện tại
+    setStudents(prev => {
+        const newStudents = prev.map(s => s.id === studentId ? { ...s, score: s.score + amount } : s);
+        // Ghi ngay lên Firebase
+        saveStudentsToFirebase(newStudents); 
+        return newStudents; // Cập nhật local để UI phản hồi ngay (Optimistic Update)
+    });
   }, []);
 
+  // 2. Nhập tên (Chỉ cập nhật Local State, chưa lưu Firebase để tránh lag khi gõ)
   const handleUpdateName = (studentId: number, newName: string) => {
     setStudents(prev => prev.map(s => s.id === studentId ? { ...s, name: newName } : s));
   };
 
-  const handleSaveNames = () => {
-    localStorage.setItem(STORAGE_KEY_STUDENTS, JSON.stringify(students));
+  // 3. Nút Lưu Tên & Note (Sidebar bên trái)
+  const handleSaveSidebar = () => {
+    // Lưu cả danh sách học sinh (đã sửa tên) và ghi chú note lên Firebase
+    const updates: any = {};
+    updates[`${DB_ROOT}/students`] = students;
+    updates[`${DB_ROOT}/note`] = classNote;
+
+    // Dùng writeData để update (bạn có thể dùng update của firebase nếu muốn tách lẻ, nhưng writeData đè path cũng được)
+    // Ở đây mình gọi 2 lần writeData cho chắc hoặc dùng updateData nếu bạn export nó
+    writeData(`${DB_ROOT}/students`, students);
+    writeData(`${DB_ROOT}/note`, classNote);
+
     setSaveStatus('saved');
     setTimeout(() => setSaveStatus('idle'), 2000);
   };
 
+  // 4. Lưu Luật (Sidebar bên phải)
   const handleSaveRules = () => {
-    localStorage.setItem(STORAGE_KEY_RULES, classRules);
+    writeData(`${DB_ROOT}/rules`, classRules);
     setRulesSaveStatus('saved');
     setTimeout(() => setRulesSaveStatus('idle'), 2000);
   };
 
+  // 5. Khôi phục tên gốc
   const handleRestoreOriginalNames = () => {
-    if (window.confirm('Bạn có chắc chắn muốn khôi phục lại tên ban đầu của toàn bộ thành viên? (Điểm số vẫn giữ nguyên)')) {
-      setStudents(prev => prev.map(current => {
+    if (window.confirm('Bạn có chắc chắn muốn khôi phục lại tên ban đầu? (Điểm số vẫn giữ nguyên)')) {
+      const newStudents = students.map(current => {
         const original = INITIAL_STUDENTS.find(s => s.id === current.id);
         return original ? { ...current, name: original.name } : current;
-      }));
+      });
+      setStudents(newStudents);
+      saveStudentsToFirebase(newStudents);
     }
   };
 
+  // 6. Đổi chỗ 2 học sinh (Swap)
   const handleSwapStudents = useCallback((id1: number, id2: number) => {
     setStudents(prev => {
       const next = [...prev];
@@ -127,26 +184,39 @@ const App: React.FC = () => {
           const s2 = { ...next[idx2] };
           const team1 = s1.team;
           const team2 = s2.team;
+          
+          // Đổi vị trí nhưng giữ nguyên team (nếu logic của bạn là thế) 
+          // HOẶC đổi team cho nhau. Ở code cũ bạn đổi team cho nhau:
           next[idx1] = { ...s2, team: team1 };
           next[idx2] = { ...s1, team: team2 };
+          
+          // Lưu ngay lên Firebase
+          saveStudentsToFirebase(next);
       }
       return next;
     });
   }, []);
 
+  // 7. Chuyển học sinh sang tổ khác (Move)
   const handleMoveToTeam = useCallback((studentId: number, targetTeamId: number) => {
-    setStudents(prev => prev.map(s => 
-      s.id === studentId ? { ...s, team: targetTeamId } : s
-    ));
+    setStudents(prev => {
+        const newStudents = prev.map(s => s.id === studentId ? { ...s, team: targetTeamId } : s);
+        saveStudentsToFirebase(newStudents);
+        return newStudents;
+    });
   }, []);
 
+  // 8. Reset toàn bộ dữ liệu điểm
   const resetData = () => {
-    if (window.confirm('Bạn có chắc chắn muốn đặt lại toàn bộ điểm số về 0?')) {
-      setStudents(prev => prev.map(s => ({ ...s, score: 0 })));
+    if (window.confirm('CẢNH BÁO: Bạn có chắc chắn muốn đặt lại toàn bộ điểm số về 0 cho cả lớp không?')) {
+      const resetScoreStudents = students.map(s => ({ ...s, score: 0 }));
+      setStudents(resetScoreStudents);
+      saveStudentsToFirebase(resetScoreStudents);
     }
   };
 
-  // Tính toán tổng điểm theo tổ
+
+  // --- TÍNH TOÁN DỮ LIỆU HIỂN THỊ (MEMO) ---
   const teamTotals = useMemo(() => {
     return students.reduce((acc, student) => {
       acc[student.team] = (acc[student.team] || 0) + student.score;
@@ -154,15 +224,15 @@ const App: React.FC = () => {
     }, {} as { [key: number]: number });
   }, [students]);
 
-  const lateLeaderboard = students
+  const lateLeaderboard = useMemo(() => students
     .filter(s => s.score < 0)
     .sort((a, b) => a.score - b.score)
-    .slice(0, 10);
+    .slice(0, 10), [students]);
 
-  const improvementLeaderboard = students
+  const improvementLeaderboard = useMemo(() => students
     .filter(s => s.score > 0)
     .sort((a, b) => b.score - a.score)
-    .slice(0, 5);
+    .slice(0, 5), [students]);
 
   return (
     <div className="min-h-screen bg-gray-950 text-white flex overflow-hidden">
@@ -190,19 +260,19 @@ const App: React.FC = () => {
               value={classNote}
               onChange={(e) => setClassNote(e.target.value)}
               className="w-full bg-transparent text-yellow-100 text-sm focus:outline-none resize-none min-h-[100px]"
-              placeholder="Nhập ghi chú quan trọng..."
+              placeholder="Nhập ghi chú quan trọng (nhấn Lưu để đồng bộ)..."
             />
           </div>
 
           <div className="grid grid-cols-2 gap-2">
             <button 
-              onClick={handleSaveNames}
+              onClick={handleSaveSidebar}
               className={`flex items-center justify-center gap-2 py-2 px-3 rounded-lg text-xs font-bold transition-all ${
                 saveStatus === 'saved' ? 'bg-green-600 text-white' : 'bg-indigo-600 hover:bg-indigo-500 text-white'
               }`}
             >
               <i className={`fas ${saveStatus === 'saved' ? 'fa-check' : 'fa-save'}`}></i>
-              {saveStatus === 'saved' ? 'Đã lưu' : 'Lưu tên'}
+              {saveStatus === 'saved' ? 'Đã lưu' : 'Lưu & Note'}
             </button>
             <button 
               onClick={handleRestoreOriginalNames}
@@ -270,7 +340,7 @@ const App: React.FC = () => {
             Sơ Đồ Thi Đua Lớp 11A3
           </h1>
           <p className="text-gray-500 text-xs mt-2 font-medium tracking-widest uppercase opacity-60">
-            Quản lý thi đua & chỗ ngồi học tập
+            Quản lý thi đua & chỗ ngồi học tập (Online Sync)
           </p>
         </header>
 
@@ -325,7 +395,7 @@ const App: React.FC = () => {
 
         <div className="flex-1 overflow-y-auto p-4 flex flex-col gap-4">
           <div className="flex-1 flex flex-col">
-            <p className="text-[10px] text-gray-500 mb-2 italic">Chỉnh sửa nội dung luật bên dưới và nhấn Lưu để cập nhật.</p>
+            <p className="text-[10px] text-gray-500 mb-2 italic">Chỉnh sửa nội dung luật bên dưới và nhấn Lưu để đồng bộ.</p>
             <textarea
               value={classRules}
               onChange={(e) => setClassRules(e.target.value)}
